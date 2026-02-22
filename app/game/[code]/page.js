@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { saveGame, loadGame, subscribeToGame, deleteGame, saveEmail, GAME_EXPIRY_MS } from '../../../lib/firebase';
+import { saveGame, loadGame, subscribeToGame, deleteGame, updatePlayerStats, GAME_EXPIRY_MS } from '../../../lib/firebase';
+import { useAuth } from '../../../lib/AuthContext';
 
 const EMPTY = 0;
 const RED = 1;
@@ -84,18 +85,9 @@ export default function GamePage() {
   const [copied, setCopied] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(GAME_EXPIRY_MS);
   const [expired, setExpired] = useState(false);
-  
-  // Email capture state
-  const [showEmailModal, setShowEmailModal] = useState(false);
-  const [email, setEmail] = useState('');
-  const [emailSubmitted, setEmailSubmitted] = useState(false);
-  const [emailError, setEmailError] = useState('');
+  const [showAuthPrompt, setShowAuthPrompt] = useState(false);
 
-  // Check if user already submitted email
-  useEffect(() => {
-    const submitted = localStorage.getItem('colorwar_email_submitted');
-    if (submitted) setEmailSubmitted(true);
-  }, []);
+  const { user, loading: authLoading, signInWithGoogle } = useAuth();
 
   // Initialize game
   useEffect(() => {
@@ -129,7 +121,12 @@ export default function GamePage() {
       } else if (!state.playerR) {
         const newPlayerId = Math.random().toString(36).slice(2, 14);
         state.playerR = newPlayerId;
+        state.uidR = user?.uid || null;
+        state.nameR = user?.displayName || null;
         state.status = 'playing';
+        if (!state.statsUpdated && state.statsUpdated !== false) {
+          state.statsUpdated = false;
+        }
         await saveGame(code, state);
         localStorage.setItem(`colorwar_${code}_player`, newPlayerId);
         localStorage.setItem(`colorwar_${code}_role`, 'R');
@@ -191,15 +188,54 @@ export default function GamePage() {
     }
   }, [expired, router]);
 
-  // Show email modal after game ends (only if not already submitted)
+  // Mid-game auth linking: if user signs in while playing, link uid to game
   useEffect(() => {
-    if (gameState?.status === 'finished' && !emailSubmitted) {
+    if (!user || !gameState || !myRole || gameState.status === 'finished') return;
+    const uidField = myRole === 'B' ? 'uidB' : 'uidR';
+    const nameField = myRole === 'B' ? 'nameB' : 'nameR';
+    if (!gameState[uidField] && user.uid) {
+      saveGame(code, { ...gameState, [uidField]: user.uid, [nameField]: user.displayName || null });
+    }
+  }, [user, gameState, myRole, code]);
+
+  // Stats update when game finishes
+  useEffect(() => {
+    if (!gameState || gameState.status !== 'finished' || gameState.statsUpdated) return;
+    const doUpdate = async () => {
+      const { uidB, uidR, nameB, nameR, winner } = gameState;
+      const resultForB = winner === 'B' ? 'won' : winner === 'R' ? 'lost' : 'tied';
+      const resultForR = winner === 'R' ? 'won' : winner === 'B' ? 'lost' : 'tied';
+
+      if (uidB) await updatePlayerStats(uidB, nameB, null, resultForB);
+      if (uidR) await updatePlayerStats(uidR, nameR, null, resultForR);
+
+      await saveGame(code, { ...gameState, statsUpdated: true });
+    };
+    doUpdate();
+  }, [gameState?.status, gameState?.statsUpdated]);
+
+  // Show auth prompt after game ends for non-signed-in users
+  useEffect(() => {
+    if (gameState?.status === 'finished' && !user && !authLoading) {
       const timeout = setTimeout(() => {
-        setShowEmailModal(true);
+        setShowAuthPrompt(true);
       }, 2000);
       return () => clearTimeout(timeout);
     }
-  }, [gameState?.status, emailSubmitted]);
+  }, [gameState?.status, user, authLoading]);
+
+  // Retroactive sign-in: if user signs in via post-game modal, link uid and update stats
+  useEffect(() => {
+    if (!user || !gameState || gameState.status !== 'finished' || !myRole) return;
+    const uidField = myRole === 'B' ? 'uidB' : 'uidR';
+    if (!gameState[uidField] && user.uid) {
+      const nameField = myRole === 'B' ? 'nameB' : 'nameR';
+      const result = gameState.winner === myRole ? 'won' : gameState.winner === 'tie' ? 'tied' : 'lost';
+      updatePlayerStats(user.uid, user.displayName, user.email, result);
+      saveGame(code, { ...gameState, [uidField]: user.uid, [nameField]: user.displayName || null });
+      setShowAuthPrompt(false);
+    }
+  }, [user, gameState?.status]);
 
   const isMyTurn = gameState && gameState.turn === myRole && gameState.status === 'playing';
   const screen = expired ? 'expired' : !gameState ? 'loading' : gameState.status === 'waiting' ? 'invite' : gameState.status === 'finished' ? 'finished' : 'playing';
@@ -258,24 +294,8 @@ export default function GamePage() {
     });
   };
 
-  const submitEmail = async () => {
-    if (!email.trim()) {
-      setEmailError('Please enter your email');
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setEmailError('Please enter a valid email');
-      return;
-    }
-    
-    await saveEmail(email, { gameCode: code });
-    localStorage.setItem('colorwar_email_submitted', 'true');
-    setEmailSubmitted(true);
-    setShowEmailModal(false);
-  };
-
-  const skipEmail = () => {
-    setShowEmailModal(false);
+  const skipAuthPrompt = () => {
+    setShowAuthPrompt(false);
   };
 
   const isGhost = (r, c) => {
@@ -336,54 +356,39 @@ export default function GamePage() {
     </div>
   );
 
-  const EmailModal = () => (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20, animation: 'fadeIn 0.3s ease' }} onClick={skipEmail}>
+  const AuthPromptModal = () => (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 20, animation: 'fadeIn 0.3s ease' }} onClick={skipAuthPrompt}>
       <div style={{ background: '#fff', borderRadius: 16, padding: '28px 24px', maxWidth: 360, width: '100%', boxShadow: '0 24px 48px rgba(0,0,0,0.2)', animation: 'slideUp 0.3s ease' }} onClick={(e) => e.stopPropagation()}>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>🎮</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600, color: TEXT }}>Great game!</h3>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>🏆</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 600, color: TEXT }}>Track your wins</h3>
           <p style={{ fontSize: 14, color: TEXT_MUTED, margin: 0, lineHeight: 1.5 }}>
-            Want to learn winning strategies?<br />
-            Get tips & updates (no spam, ever).
+            Sign in to save your stats and<br />
+            compete on the leaderboard.
           </p>
         </div>
-        
-        <input
-          type="email"
-          placeholder="Your email"
-          value={email}
-          onChange={(e) => { setEmail(e.target.value); setEmailError(''); }}
-          onKeyDown={(e) => e.key === 'Enter' && submitEmail()}
-          style={{
-            width: '100%',
-            padding: '12px 14px',
-            border: `1.5px solid ${emailError ? RED_COLOR : BORDER}`,
-            borderRadius: 10,
-            fontSize: 15,
-            outline: 'none',
-            background: '#fff',
-            color: TEXT,
-            marginBottom: 8,
-          }}
-        />
-        {emailError && <p style={{ color: RED_COLOR, fontSize: 12, margin: '0 0 8px' }}>{emailError}</p>}
-        
-        <button onClick={submitEmail} style={{
+
+        <button onClick={signInWithGoogle} style={{
           width: '100%',
           padding: '12px 0',
-          background: BLUE_COLOR,
-          color: '#fff',
-          border: 'none',
+          background: '#fff',
+          color: TEXT,
+          border: `1.5px solid ${BORDER}`,
           borderRadius: 10,
           fontSize: 14,
           fontWeight: 600,
           cursor: 'pointer',
           marginBottom: 8,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
         }}>
-          Yes, send me tips!
+          <svg width="16" height="16" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Sign in with Google
         </button>
-        
-        <button onClick={skipEmail} style={{
+
+        <button onClick={skipAuthPrompt} style={{
           width: '100%',
           padding: '10px 0',
           background: 'none',
@@ -426,7 +431,7 @@ export default function GamePage() {
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
       {showRules && <RulesOverlay />}
-      {showEmailModal && <EmailModal />}
+      {showAuthPrompt && <AuthPromptModal />}
       <Header />
 
       {/* INVITE SCREEN */}
@@ -497,8 +502,8 @@ export default function GamePage() {
           </div>
 
           <div style={{ display: 'flex', gap: 10, width: '100%', justifyContent: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 7, fontSize: 11, fontWeight: 500, background: myRole === 'B' ? BLUE_LIGHT : RED_LIGHT, color: myRole === 'B' ? BLUE_COLOR : RED_COLOR, border: `1px solid ${myRole === 'B' ? BLUE_COLOR : RED_COLOR}22` }}>You: {myRole === 'B' ? 'Blue 2×2' : 'Red 1×1'}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 7, fontSize: 11, fontWeight: 500, background: myRole === 'B' ? RED_LIGHT : BLUE_LIGHT, color: myRole === 'B' ? RED_COLOR : BLUE_COLOR, border: `1px solid ${myRole === 'B' ? RED_COLOR : BLUE_COLOR}18`, opacity: 0.5 }}>Opp: {myRole === 'B' ? 'Red 1×1' : 'Blue 2×2'}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 7, fontSize: 11, fontWeight: 500, background: myRole === 'B' ? BLUE_LIGHT : RED_LIGHT, color: myRole === 'B' ? BLUE_COLOR : RED_COLOR, border: `1px solid ${myRole === 'B' ? BLUE_COLOR : RED_COLOR}22` }}>{(myRole === 'B' ? gameState.nameB : gameState.nameR)?.split(' ')[0] || 'You'}: {myRole === 'B' ? 'Blue 2×2' : 'Red 1×1'}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 7, fontSize: 11, fontWeight: 500, background: myRole === 'B' ? RED_LIGHT : BLUE_LIGHT, color: myRole === 'B' ? RED_COLOR : BLUE_COLOR, border: `1px solid ${myRole === 'B' ? RED_COLOR : BLUE_COLOR}18`, opacity: 0.5 }}>{(myRole === 'B' ? gameState.nameR : gameState.nameB)?.split(' ')[0] || 'Opp'}: {myRole === 'B' ? 'Red 1×1' : 'Blue 2×2'}</div>
           </div>
 
           <div style={{ width: '100%', maxWidth: 380, display: 'flex', flexDirection: 'column', gap: 3 }}>

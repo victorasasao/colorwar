@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx next build 2>&1 | tail -30)"
+      "Bash(npx next build 2>&1 | tail -30)",
+      "Bash(npm run build 2>&1)"
     ]
   }
 }

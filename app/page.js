@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { saveGame } from '../lib/firebase';
+import { saveGame, loadLeaderboard } from '../lib/firebase';
+import { useAuth } from '../lib/AuthContext';
 
 const BOARD_SIZES = [
   { size: 6, time: '~3 min' },
@@ -18,6 +19,7 @@ const BORDER = '#E5E5E5';
 const TEXT = '#1C1917';
 const TEXT_MUTED = '#78716C';
 const BLUE_COLOR = '#2563EB';
+const BLUE_LIGHT = '#DBEAFE';
 const RED_COLOR = '#DC2626';
 
 const genId = () => {
@@ -31,11 +33,23 @@ const createBoard = (size) => Array.from({ length: size }, () => Array(size).fil
 
 export default function Home() {
   const router = useRouter();
+  const { user, loading: authLoading, signInWithGoogle, logOut } = useAuth();
   const [joinCode, setJoinCode] = useState('');
   const [joinError, setJoinError] = useState('');
   const [creating, setCreating] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [showSizeSelect, setShowSizeSelect] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [leaderboardData, setLeaderboardData] = useState([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+
+  const openLeaderboard = async () => {
+    setShowLeaderboard(true);
+    setLeaderboardLoading(true);
+    const data = await loadLeaderboard();
+    setLeaderboardData(data);
+    setLeaderboardLoading(false);
+  };
 
   const createGame = async (boardSize) => {
     setCreating(true);
@@ -48,6 +62,11 @@ export default function Home() {
       turn: 'B',
       playerB: playerId,
       playerR: null,
+      uidB: user?.uid || null,
+      uidR: null,
+      nameB: user?.displayName || null,
+      nameR: null,
+      statsUpdated: false,
       status: 'waiting',
       winner: null,
       createdAt: Date.now(),
@@ -98,21 +117,67 @@ export default function Home() {
           <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.02em' }}>ColorWar</span>
           <div style={{ width: 5, height: 5, borderRadius: 1, background: RED_COLOR }} />
         </div>
-        <button
-          onClick={() => setShowRules(true)}
-          style={{
-            background: 'none',
-            border: `1.5px solid ${BORDER}`,
-            borderRadius: 8,
-            padding: '4px 10px',
-            fontSize: 11,
-            fontWeight: 500,
-            color: TEXT_MUTED,
-            cursor: 'pointer',
-          }}
-        >
-          Rules
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {!authLoading && (
+            user ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 500, color: TEXT }}>{user.displayName?.split(' ')[0]}</span>
+                <button
+                  onClick={logOut}
+                  style={{ background: 'none', border: 'none', fontSize: 11, color: TEXT_MUTED, cursor: 'pointer', padding: 0 }}
+                >
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={signInWithGoogle}
+                style={{
+                  background: 'none',
+                  border: `1.5px solid ${BORDER}`,
+                  borderRadius: 8,
+                  padding: '4px 10px',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: TEXT_MUTED,
+                  cursor: 'pointer',
+                }}
+              >
+                Sign in
+              </button>
+            )
+          )}
+          <button
+            onClick={openLeaderboard}
+            style={{
+              background: 'none',
+              border: `1.5px solid ${BORDER}`,
+              borderRadius: 8,
+              padding: '4px 10px',
+              fontSize: 11,
+              fontWeight: 500,
+              color: TEXT_MUTED,
+              cursor: 'pointer',
+            }}
+          >
+            Leaderboard
+          </button>
+          <button
+            onClick={() => setShowRules(true)}
+            style={{
+              background: 'none',
+              border: `1.5px solid ${BORDER}`,
+              borderRadius: 8,
+              padding: '4px 10px',
+              fontSize: 11,
+              fontWeight: 500,
+              color: TEXT_MUTED,
+              cursor: 'pointer',
+            }}
+          >
+            Rules
+          </button>
+        </div>
       </div>
 
       {/* Main content */}
@@ -390,6 +455,116 @@ export default function Home() {
               }}
             >
               Got it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Leaderboard modal */}
+      {showLeaderboard && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: 20,
+            animation: 'fadeIn 0.2s ease',
+          }}
+          onClick={() => setShowLeaderboard(false)}
+        >
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 16,
+              padding: '24px 20px',
+              maxWidth: 400,
+              width: '100%',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              boxShadow: '0 24px 48px rgba(0,0,0,0.15)',
+              animation: 'slideUp 0.25s ease',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 16px', fontSize: 18, fontWeight: 600, color: TEXT }}>
+              Leaderboard
+            </h3>
+            {leaderboardLoading ? (
+              <p style={{ textAlign: 'center', color: TEXT_MUTED, fontSize: 14 }}>Loading...</p>
+            ) : leaderboardData.length === 0 ? (
+              <p style={{ textAlign: 'center', color: TEXT_MUTED, fontSize: 14 }}>No players yet. Be the first!</p>
+            ) : (
+              <div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '28px 1fr 36px 36px 52px',
+                  gap: '0 8px',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: TEXT_MUTED,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  padding: '0 4px 8px',
+                  borderBottom: `1px solid ${BORDER}`,
+                }}>
+                  <span>#</span>
+                  <span>Player</span>
+                  <span style={{ textAlign: 'center' }}>W</span>
+                  <span style={{ textAlign: 'center' }}>L</span>
+                  <span style={{ textAlign: 'right' }}>Win%</span>
+                </div>
+                {leaderboardData.map((p, i) => {
+                  const isMe = user && p.uid === user.uid;
+                  return (
+                    <div
+                      key={p.uid}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '28px 1fr 36px 36px 52px',
+                        gap: '0 8px',
+                        fontSize: 13,
+                        padding: '8px 4px',
+                        borderBottom: `1px solid ${BORDER}`,
+                        background: isMe ? BLUE_LIGHT : 'transparent',
+                        borderRadius: isMe ? 6 : 0,
+                        fontWeight: isMe ? 600 : 400,
+                        color: TEXT,
+                      }}
+                    >
+                      <span style={{ color: TEXT_MUTED }}>{i + 1}</span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.displayName || 'Anonymous'}
+                      </span>
+                      <span style={{ textAlign: 'center' }}>{p.gamesWon}</span>
+                      <span style={{ textAlign: 'center' }}>{p.gamesLost}</span>
+                      <span style={{ textAlign: 'right' }}>
+                        {p.gamesPlayed >= 5 ? `${p.winRate}%` : `${p.gamesPlayed}/5`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button
+              onClick={() => setShowLeaderboard(false)}
+              style={{
+                marginTop: 16,
+                width: '100%',
+                padding: '10px 0',
+                background: TEXT,
+                color: '#fff',
+                border: 'none',
+                borderRadius: 10,
+                fontSize: 14,
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              Close
             </button>
           </div>
         </div>
