@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npx next build 2>&1 | tail -30)",
-      "Bash(npm run build 2>&1)"
+      "Bash(npm run build 2>&1)",
+      "Bash(git add . && git commit -m \"$\\(cat <<'EOF'\nReplace code entry with inline leaderboard preview on home screen\n\nRemove the \"got a code?\" section \\(input + join button\\) since players join\nvia shared links. Add a compact top-5 leaderboard preview that loads on\nmount, highlights the current user's rank, and prompts sign-in if needed.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push)"
     ]
   }
 }

@@ -34,14 +34,16 @@ const createBoard = (size) => Array.from({ length: size }, () => Array(size).fil
 export default function Home() {
   const router = useRouter();
   const { user, loading: authLoading, signInWithGoogle, logOut } = useAuth();
-  const [joinCode, setJoinCode] = useState('');
-  const [joinError, setJoinError] = useState('');
   const [creating, setCreating] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [showSizeSelect, setShowSizeSelect] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [leaderboardData, setLeaderboardData] = useState([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+
+  useEffect(() => {
+    loadLeaderboard().then(setLeaderboardData);
+  }, []);
 
   const openLeaderboard = async () => {
     setShowLeaderboard(true);
@@ -80,18 +82,11 @@ export default function Home() {
     router.push(`/game/${code}`);
   };
 
-  const joinGame = () => {
-    const code = joinCode.trim().toUpperCase();
-    if (!code) {
-      setJoinError('Enter the game code from your friend');
-      return;
-    }
-    if (code.length !== 6) {
-      setJoinError('Code should be 6 characters');
-      return;
-    }
-    router.push(`/game/${code}`);
-  };
+  // Compute leaderboard preview: top 5 + current user if outside top 5
+  const previewTop5 = leaderboardData.slice(0, 5);
+  const userRankIndex = user ? leaderboardData.findIndex(p => p.uid === user.uid) : -1;
+  const userInTop5 = userRankIndex >= 0 && userRankIndex < 5;
+  const userEntry = userRankIndex >= 0 && !userInTop5 ? leaderboardData[userRankIndex] : null;
 
   return (
     <div style={{
@@ -247,60 +242,120 @@ export default function Home() {
           Create Game
         </button>
 
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          width: '100%',
-          color: TEXT_MUTED,
-          fontSize: 11,
-        }}>
-          <div style={{ flex: 1, height: 1, background: BORDER }} />
-          <span>got a code?</span>
-          <div style={{ flex: 1, height: 1, background: BORDER }} />
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, width: '100%' }}>
-          <input
-            type="text"
-            placeholder="Enter code"
-            maxLength={6}
-            value={joinCode}
-            onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setJoinError(''); }}
-            onKeyDown={(e) => e.key === 'Enter' && joinGame()}
-            style={{
-              flex: 1,
-              padding: '12px 14px',
-              border: `1.5px solid ${BORDER}`,
-              borderRadius: 10,
-              fontSize: 16,
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontWeight: 500,
-              letterSpacing: '0.1em',
-              textTransform: 'uppercase',
-              outline: 'none',
-              background: '#fff',
-              color: TEXT,
-              textAlign: 'center',
-            }}
-          />
-          <button
-            onClick={joinGame}
-            style={{
-              padding: '12px 20px',
-              background: '#fff',
-              color: TEXT,
-              border: `1.5px solid ${TEXT}`,
-              borderRadius: 10,
-              fontSize: 14,
+        {/* Leaderboard preview */}
+        {previewTop5.length > 0 && (
+          <div style={{
+            width: '100%',
+            background: '#fff',
+            border: `1px solid ${BORDER}`,
+            borderRadius: 12,
+            padding: '14px 16px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <p style={{ fontSize: 11, fontWeight: 600, color: TEXT_MUTED, margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Top Players
+              </p>
+              <button
+                onClick={openLeaderboard}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: BLUE_COLOR,
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                View all
+              </button>
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '20px 1fr 32px 48px',
+              gap: '0 6px',
+              fontSize: 10,
               fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Join
-          </button>
-        </div>
-        {joinError && <p style={{ color: RED_COLOR, fontSize: 12, margin: 0 }}>{joinError}</p>}
+              color: TEXT_MUTED,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              padding: '0 2px 6px',
+              borderBottom: `1px solid ${BORDER}`,
+            }}>
+              <span>#</span>
+              <span>Player</span>
+              <span style={{ textAlign: 'center' }}>W</span>
+              <span style={{ textAlign: 'right' }}>Win%</span>
+            </div>
+            {previewTop5.map((p, i) => {
+              const isMe = user && p.uid === user.uid;
+              return (
+                <div
+                  key={p.uid}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '20px 1fr 32px 48px',
+                    gap: '0 6px',
+                    fontSize: 13,
+                    padding: '6px 2px',
+                    borderBottom: i < previewTop5.length - 1 || userEntry ? `1px solid ${BORDER}` : 'none',
+                    background: isMe ? BLUE_LIGHT : 'transparent',
+                    borderRadius: isMe ? 4 : 0,
+                    fontWeight: isMe ? 600 : 400,
+                    color: TEXT,
+                  }}
+                >
+                  <span style={{ color: TEXT_MUTED, fontSize: 12 }}>{i + 1}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.displayName || 'Anonymous'}
+                  </span>
+                  <span style={{ textAlign: 'center' }}>{p.gamesWon}</span>
+                  <span style={{ textAlign: 'right', fontSize: 12, color: TEXT_MUTED }}>
+                    {p.gamesPlayed >= 5 ? `${p.winRate}%` : `${p.gamesPlayed}/5`}
+                  </span>
+                </div>
+              );
+            })}
+            {userEntry && (
+              <>
+                <div style={{ padding: '2px 0', textAlign: 'center', color: TEXT_MUTED, fontSize: 10, letterSpacing: '0.15em' }}>...</div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '20px 1fr 32px 48px',
+                    gap: '0 6px',
+                    fontSize: 13,
+                    padding: '6px 2px',
+                    background: BLUE_LIGHT,
+                    borderRadius: 4,
+                    fontWeight: 600,
+                    color: TEXT,
+                  }}
+                >
+                  <span style={{ color: TEXT_MUTED, fontSize: 12 }}>{userRankIndex + 1}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {userEntry.displayName || 'Anonymous'}
+                  </span>
+                  <span style={{ textAlign: 'center' }}>{userEntry.gamesWon}</span>
+                  <span style={{ textAlign: 'right', fontSize: 12, color: TEXT_MUTED }}>
+                    {userEntry.gamesPlayed >= 5 ? `${userEntry.winRate}%` : `${userEntry.gamesPlayed}/5`}
+                  </span>
+                </div>
+              </>
+            )}
+            {!user && !authLoading && (
+              <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '8px 0 0', textAlign: 'center' }}>
+                <button
+                  onClick={signInWithGoogle}
+                  style={{ background: 'none', border: 'none', color: BLUE_COLOR, fontSize: 11, fontWeight: 500, cursor: 'pointer', padding: 0 }}
+                >
+                  Sign in
+                </button>
+                {' '}to track your rank
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Board size selection modal */}
